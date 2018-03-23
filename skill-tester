@@ -104,6 +104,12 @@ class SkillRunner(object):
         self.skill_folder = os.path.abspath(skill_folder)
         sd = create_skill_descriptor(skill_folder)
         self.skill = load_skill(sd, self.fe, '987654321')
+        if not self.skill:
+            print >> sys.stderr, "The skill failed to load. Listing the logs to explain why."
+            for log in [x.strip() for x in self.stdout_catcher.get_all() if x.strip() and "api.mycroft.ai" not in x]:
+                print >> sys.stderr, log
+            sys.exit(4)
+
 
     def speak(self, message):
         original_stdout.write("\n%sMycroft> %s%s%s" % (SPEECH_RESET, SPEECH_MYCROFT, message.data["utterance"].strip(), SPEECH_RESET))
