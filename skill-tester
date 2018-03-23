@@ -1,0 +1,159 @@
+#!/usr/bin/env python
+
+"""
+Run a Mycroft skill so you can interact with it with text, without having to install Mycroft core or have
+the whole core running.
+
+Stuart Langridge <sil@kryogenix.org>, March 2018
+"""
+
+# Mycroft is very chatty when starting up, which includes importing its libraries. So we have to
+# trap stdout first before we do anything
+import sys, os, urllib, urlparse
+original_stdout = sys.stdout
+print "Starting up skill infrastructure..."
+class StdoutCatcher(object):
+    "Intercept stdout to catch Mycroft logging"
+    def __init__(self):
+        self.__lines = []
+    def write(self, s):
+        self.__lines.append(s)
+    def get_all(self):
+        l = self.__lines[:]
+        self.__lines = []
+        return l
+
+stdout_catcher = StdoutCatcher()
+sys.stdout = stdout_catcher
+
+# Try importing Mycroft from the path. If it doesn't work, expect there to be a mycroft-core folder
+try:
+    import mycroft
+except ImportError:
+    core_location = os.path.join(os.path.split(__file__)[0], "mycroft-core")
+    if not os.path.isdir(core_location):
+        print >> sys.stderr, "Couldn't find mycroft-core; it should be in a 'mycroft-core' folder here"
+        sys.exit(3)
+    sys.path.append(core_location)
+
+# Now we can import Mycroft libraries
+from mycroft.skills.intent_service import IntentService
+from mycroft.skills.core import create_skill_descriptor, load_skill
+from mycroft.messagebus.message import Message
+
+bold='\033[01m'
+bg_cyan='\033[46m'
+bg_lightgrey='\033[47m'
+bg_orange='\033[43m'
+fg_black='\033[30m'
+fg_blue='\033[34m'
+
+SPEECH_MYCROFT = "%s%s%s" % (bold, bg_lightgrey, fg_black)
+SPEECH_ME = "%s%s%s" % (bold, bg_orange, fg_black)
+SPEECH_RESET = '\033[0m'
+INPUT = "Your input> "
+LINE_UP = "\033[3D\033[1A"
+
+class FakeEmitter(object):
+    "Fake emitter for the skill testing script to use"
+    def __init__(self):
+        self.hooks = {}
+
+    @staticmethod
+    def build_url(host, port, route, ssl): raise NotImplementedError
+    def create_client(self): raise NotImplementedError
+    def on_open(self, ws): raise NotImplementedError
+    def on_close(self, ws): raise NotImplementedError
+    def on_error(self, ws, error): raise NotImplementedError
+    def wait_for_response(self, message, reply_type=None, timeout=None): raise NotImplementedError
+    def once(self, event_name, func): raise NotImplementedError
+    def remove(self, event_name, func): raise NotImplementedError
+    def remove_all_listeners(self, event_name): raise NotImplementedError
+    def run_forever(self): raise NotImplementedError
+    def close(self): raise NotImplementedError
+
+    def on_message(self, ws, message):
+        parsed_message = Message.deserialize(message)
+        print "FakeEmitter: on_message", parsed_message
+        return
+        self.emitter.emit('message', message)
+        parsed_message = Message.deserialize(message)
+        self.pool.apply_async(
+            self.emitter.emit, (parsed_message.type, parsed_message))
+
+    def emit(self, message):
+        ms = message.serialize()
+        print "Emitting message %s" % message.type
+        for handler in self.hooks.get(message.type, []):
+            handler(message)
+
+
+    def on(self, event_name, func):
+        print "Registering handler for %s" % event_name
+        if event_name not in self.hooks: self.hooks[event_name] = []
+        self.hooks[event_name].append(func)
+
+class SkillRunner(object):
+    def __init__(self, skill_folder, stdout_catcher):
+        self.stdout_catcher = stdout_catcher
+        self.fe = FakeEmitter()
+        self.fe.on("speak", self.speak)
+        self.fe.on("mycroft.audio.service.play", self.play_audio)
+        self.fe.on("intent_failure", self.intent_failure)
+        self.isrv = IntentService(self.fe)
+        self.skill_folder = os.path.abspath(skill_folder)
+        sd = create_skill_descriptor(skill_folder)
+        self.skill = load_skill(sd, self.fe, '987654321')
+
+    def speak(self, message):
+        original_stdout.write("\n%sMycroft> %s%s%s" % (SPEECH_RESET, SPEECH_MYCROFT, message.data["utterance"].strip(), SPEECH_RESET))
+
+    def play_audio(self, message):
+        tracks = []
+        for t in message.data["tracks"]:
+            tpath = urllib.url2pathname(urlparse.urlparse(t).path)
+            tracks.append(os.path.relpath(tpath, self.skill_folder))
+        original_stdout.write("\n %s*** Mycroft plays audio (%s) ***%s" % (SPEECH_MYCROFT, ", ".join(tracks), SPEECH_RESET))
+        if message.data.get("utterance"): self.speak(message)
+
+    def intent_failure(self, message):
+        original_stdout.write("\n %s*** No output from skill ***%s" % (SPEECH_MYCROFT, SPEECH_RESET))
+
+    def start(self):
+        print >> sys.stderr, "(enter 'show logs' at any time to see all logs up to now)"
+        while 1:
+            logs = [x.strip() for x in self.stdout_catcher.get_all() if x.strip() and "api.mycroft.ai" not in x]
+            if logs:
+                s = "s"
+                if len(logs) == 1: s = ""
+                lcount = "%s(%s log line%s since last command)" % (SPEECH_RESET, len(logs), s)
+                print >> sys.stderr, lcount
+            print >> original_stdout, ("\n%s" % INPUT),
+            try:
+                i = raw_input().lower().strip()
+            except KeyboardInterrupt:
+                break
+            if i in ["quit", "end", "exit"]: break
+            if i in ["show logs"]:
+                for l in logs:
+                    if l.strip():
+                        print >> sys.stderr, l.strip()
+                continue
+            print >> original_stdout, ("%s%s%s%s%s%s" % (LINE_UP, SPEECH_RESET, INPUT, SPEECH_ME, i, SPEECH_RESET)),
+            inp = Message("dunno", {"utterances": [i]})
+            self.isrv.handle_utterance(inp)
+        print(SPEECH_RESET)
+
+if __name__ == "__main__":
+    try:
+        skill_folder = sys.argv[1]
+    except:
+        print >> sys.stderr, "Syntax: %s <skill-folder>" % sys.argv[0]
+        sys.exit(1)
+    if not os.path.isfile(os.path.join(skill_folder, "__init__.py")):
+        print >> sys.stderr, "(That doesn't look like a folder containing a Mycroft skill)"
+        print >> sys.stderr, "Syntax: %s <skill-folder>" % sys.argv[0]
+        sys.exit(2)
+    sr = SkillRunner(skill_folder, stdout_catcher)
+    sr.start()
+
