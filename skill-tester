@@ -123,7 +123,7 @@ class SkillRunner(object):
         if message.data.get("utterance"): self.speak(message)
 
     def intent_failure(self, message):
-        original_stdout.write("\n %s*** No output from skill ***%s" % (SPEECH_MYCROFT, SPEECH_RESET))
+        original_stdout.write("\n %s*** Did not match your skill ***%s" % (SPEECH_MYCROFT, SPEECH_RESET))
 
     def start(self):
         print >> sys.stderr, "(enter 'show logs' at any time to see all logs up to now)"
@@ -138,6 +138,8 @@ class SkillRunner(object):
             try:
                 i = raw_input().lower().strip()
             except KeyboardInterrupt:
+                break
+            except EOFError:
                 break
             if i in ["quit", "end", "exit"]: break
             if i in ["show logs"]:
