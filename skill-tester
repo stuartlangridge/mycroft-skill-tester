@@ -150,7 +150,7 @@ class SkillRunner(object):
             print >> original_stdout, ("%s%s%s%s%s%s" % (LINE_UP, SPEECH_RESET, INPUT, SPEECH_ME, i, SPEECH_RESET)),
             inp = Message("dunno", {"utterances": [i]})
             self.isrv.handle_utterance(inp)
-        print(SPEECH_RESET)
+        print >> original_stdout, SPEECH_RESET
 
 if __name__ == "__main__":
     try:
@@ -164,4 +164,5 @@ if __name__ == "__main__":
         sys.exit(2)
     sr = SkillRunner(skill_folder, stdout_catcher)
     sr.start()
+    sys.stdout = original_stdout
 
